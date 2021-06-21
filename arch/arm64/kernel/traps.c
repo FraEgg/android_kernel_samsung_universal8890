@@ -55,7 +55,7 @@ static const char *handler[]= {
 	"Error"
 };
 
-int show_unhandled_signals = 1;
+int show_unhandled_signals = 0;
 
 /*
  * Dump out the contents of some memory nicely...
@@ -312,6 +312,7 @@ static int __die(const char *str, int err, struct thread_info *thread,
 #endif
 		dump_instr(KERN_EMERG, regs);
 	}
+
 	return ret;
 }
 
@@ -325,10 +326,13 @@ void die(const char *str, struct pt_regs *regs, int err)
 	enum bug_trap_type bug_type = BUG_TRAP_TYPE_NONE;
 	struct thread_info *thread = current_thread_info();
 	int ret;
+	unsigned long flags;
+
+	raw_spin_lock_irqsave(&die_lock, flags);
 
 	oops_enter();
 
-	raw_spin_lock_irq(&die_lock);
+
 	console_verbose();
 	bust_spinlocks(1);
 
@@ -350,7 +354,7 @@ void die(const char *str, struct pt_regs *regs, int err)
 
 	bust_spinlocks(0);
 	add_taint(TAINT_DIE, LOCKDEP_NOW_UNRELIABLE);
-	raw_spin_unlock_irq(&die_lock);
+
 	oops_exit();
 
 #ifdef CONFIG_SEC_DEBUG_EXTRA_INFO
@@ -372,6 +376,8 @@ void die(const char *str, struct pt_regs *regs, int err)
 	if (panic_on_oops)
 		panic("Fatal exception");
 #endif
+
+	raw_spin_unlock_irqrestore(&die_lock, flags);
 
 	if (ret != NOTIFY_STOP)
 		do_exit(SIGSEGV);
@@ -472,6 +478,7 @@ asmlinkage void __exception do_undefinstr(struct pt_regs *regs)
 		return;
 
 	if (unhandled_signal(current, SIGILL) && show_unhandled_signals_ratelimited()) {
+
 		pr_info("%s[%d]: undefined instruction: pc=%p\n",
 			current->comm, task_pid_nr(current), pc);
 		dump_instr(KERN_INFO, regs);
@@ -505,7 +512,7 @@ static void cntfrq_read_handler(unsigned int esr, struct pt_regs *regs)
 	int rt = (esr & ESR_ELx_SYS64_ISS_RT_MASK) >> ESR_ELx_SYS64_ISS_RT_SHIFT;
 
 	if (rt != 31)
-		asm volatile("mrs %0, cntfrq_el0" : "=r" (regs->regs[rt]));
+		regs->regs[rt] = read_sysreg(cntfrq_el0);
 	regs->pc += 4;
 }
 
@@ -607,7 +614,7 @@ asmlinkage void bad_mode(struct pt_regs *regs, int reason, unsigned int esr)
 	sec_debug_set_extra_info_esr(esr);
 #endif
 
-	die("Oops - bad mode", regs, 0);
+
 	local_irq_disable();
 	panic("bad mode");
 }
